@@ -1,9 +1,16 @@
-<?php namespace Jackpopp\GeoDistance;
+<?php 
+/**
+ * # Geo distance calculate
+ * # Example:
+ * $geoDistance = new GeoDistance('lat', 'lng');
+ * $result = $geoDistance->scopeWithin(50, 'km', 39.9086920000, 116.397477000);
+ * print_r($result);
+ */
+namespace Jackpopp\GeoDistance;
 
-use DB;
 use Jackpopp\GeoDistance\InvalidMeasurementException;
 
-trait GeoDistanceTrait {
+class GeoDistance {
 
     protected $latColumn = 'lat';
 
@@ -12,23 +19,29 @@ trait GeoDistanceTrait {
     protected $distance = 10;
 
     private static $MEASUREMENTS = [
-        'miles' => 3959,
-        'm' => 3959,
-        'kilometers' => 6371,
-        'km' => 6371,
-        'meters' => 6371000,
-        'feet' => 20902231,
-        'nautical_miles' => 3440.06479
+        'miles'          => 3959,      // 英里
+        'm'              => 3959,      // 英里
+        'kilometers'     => 6371,      // 千米
+        'km'             => 6371,      // 千米
+        'meters'         => 6371000,   // 米
+        'feet'           => 20902231,  // 英寸
+        'nautical_miles' => 3440.06479 // 海里
     ];
+
+    public function __construct($latColumn = 'lat', $lngColumn = 'lng')
+    {
+        $this->latColumn = $latColumn;
+        $this->lngColumn = $lngColumn;
+    }
 
     public function getLatColumn()
     {
-        return "{$this->getTable()}.{$this->latColumn}";
+        return $this->latColumn;
     }
 
     public function getLngColumn()
     {
-        return "{$this->getTable()}.{$this->lngColumn}";
+        return $this->lngColumn;
     }
 
     public function lat($lat = null)
@@ -74,7 +87,6 @@ trait GeoDistanceTrait {
     }
 
     /**
-    * @param Query
     * @param integer
     * @param mixed
     * @param mixed
@@ -87,9 +99,8 @@ trait GeoDistanceTrait {
     * credit - https://developers.google.com/maps/articles/phpsqlsearch_v3
     **/
 
-    public function scopeWithin($q, $distance, $measurement = null, $lat = null, $lng = null)
+    public function scopeWithin($distance, $measurement = null, $lat = null, $lng = null)
     {
-        $pdo = DB::connection()->getPdo();
 
         $latColumn = $this->getLatColumn();
         $lngColumn = $this->getLngColumn();
@@ -107,30 +118,34 @@ trait GeoDistanceTrait {
         $maxLng = floatval($lng) + rad2deg($distance/$meanRadius/cos(deg2rad(floatval($lat))));
         $minLng = floatval($lng) - rad2deg($distance/$meanRadius/cos(deg2rad(floatval($lat))));
 
-        $lat = $pdo->quote(floatval($lat));
-        $lng = $pdo->quote(floatval($lng));
-        $meanRadius = $pdo->quote(floatval($meanRadius));
+        $column = "( $meanRadius * acos( cos( radians($lat) ) * cos( radians( $latColumn ) ) * cos( radians( $lngColumn ) - radians($lng) ) + sin( radians($lat) ) * sin( radians( $latColumn ) ) ) ) AS geo_distance";
 
-        // Paramater bindings havent been used as it would need to be within a DB::select which would run straight away and return its result, which we dont want as it will break the query builder.
-        // This method should work okay as our values have been cooerced into correct types and quoted with pdo.
+        $latBetween = [$minLat, $maxLat];
+        $lngBetween = [$minLng, $maxLng];
 
-        return $q->select(DB::raw("*, ( $meanRadius * acos( cos( radians($lat) ) * cos( radians( $latColumn ) ) * cos( radians( $lngColumn ) - radians($lng) ) + sin( radians($lat) ) * sin( radians( $latColumn ) ) ) ) AS distance"))
-            ->from(DB::raw(
-                "(
-                    Select *
-                    From {$this->getTable()}
-                    Where $latColumn Between $minLat And $maxLat
-                    And $lngColumn Between $minLng And $maxLng
-                ) As {$this->getTable()}"
-            ))
-            ->having('distance', '<=', $distance)
-            ->orderby('distance', 'ASC');
+        return [
+            'column'      => $column,
+            'latBetween'  => $latBetween,
+            'lngBetween'  => $lngBetween,
+            'distance'    => $distance,
+            'measurement' => $measurement
+        ];
+
+        // return $q->select(DB::raw("*, ( $meanRadius * acos( cos( radians($lat) ) * cos( radians( $latColumn ) ) * cos( radians( $lngColumn ) - radians($lng) ) + sin( radians($lat) ) * sin( radians( $latColumn ) ) ) ) AS distance"))
+        //     ->from(DB::raw(
+        //         "(
+        //             Select *
+        //             From {$this->getTable()}
+        //             Where $latColumn Between $minLat And $maxLat
+        //             And $lngColumn Between $minLng And $maxLng
+        //         ) As {$this->getTable()}"
+        //     ))
+        //     ->having('distance', '<=', $distance)
+        //     ->orderby('distance', 'ASC');
     }
 
-    public function scopeOutside($q, $distance, $measurement = null, $lat = null, $lng = null)
+    public function scopeOutside($distance, $measurement = null, $lat = null, $lng = null)
     {
-        $pdo = DB::connection()->getPdo();
-
         $latColumn = $this->getLatColumn();
         $lngColumn = $this->getLngColumn();
 
@@ -140,13 +155,13 @@ trait GeoDistanceTrait {
         $meanRadius = $this->resolveEarthMeanRadius($measurement);
         $distance = floatval($distance);
 
-        $lat = $pdo->quote(floatval($lat));
-        $lng = $pdo->quote(floatval($lng));
-        $meanRadius = $pdo->quote(floatval($meanRadius));
+        $column = "*, ( $meanRadius * acos( cos( radians($lat) ) * cos( radians( $latColumn ) ) * cos( radians( $lngColumn ) - radians($lng) ) + sin( radians($lat) ) * sin( radians( $latColumn ) ) ) ) AS distance";
 
-        return $q->select(DB::raw("*, ( $meanRadius * acos( cos( radians($lat) ) * cos( radians( $latColumn ) ) * cos( radians( $lngColumn ) - radians($lng) ) + sin( radians($lat) ) * sin( radians( $latColumn ) ) ) ) AS distance"))
-        ->having('distance', '>=', $distance)
-        ->orderby('distance', 'ASC');
+        return [
+            'column'      => $column,
+            'distance'    => $distance,
+            'measurement' => $measurement
+        ];
     }
 
 }
